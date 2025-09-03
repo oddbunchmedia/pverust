@@ -23,7 +23,7 @@ using Oxide.Core.Libraries;
 
 namespace Oxide.Plugins {
 
-	[Info("PvE Rust", "pverust.com", "0.0.1")]
+	[Info("PvE Rust", "pverust.com", "0.0.5")]
 	[Description("The plugin component of the PvE Rust platform.")]
 
 	class ActionLoggingCore : RustPlugin {
@@ -38,13 +38,13 @@ namespace Oxide.Plugins {
 		bool debug;
 
 		List<string> ignoreListOnEntityBuilt = new List<string>();
-		List<string> ignoreListOnPickupEntity = new List<string>();
 		List<string> ignoreListOnEntityDeath = new List<string>();
 		List<string> ignoreListOnLootEntity = new List<string>();
 		List<string> ignoreListHandleDoorActions = new List<string>();
 		List<string> ignoreListHandleMountableActions = new List<string>();
 
-		public List<object> actionLog;
+		public List<object> actions;
+		public List<object> actionsToSend;
 
 		bool canSendToPvERust = false;
 
@@ -58,9 +58,10 @@ namespace Oxide.Plugins {
 
 			serverSecretKey = configData.Keys.serverSecretKey;
 			
-			debug = configData.Services.debug;
+			debug = configData.Options.debug;
 
-			actionLog = new List<object>();
+			actions = new List<object>();
+			actionsToSend = new List<object>();
 
 			timer.Repeat(10f, 0, () => {
 				SendActionLog();
@@ -101,7 +102,9 @@ namespace Oxide.Plugins {
 
 		void InitialiseServerCallback(int code, string response) {
 
-			Puts(response);
+			if (debug) {
+				Puts(response);
+			}
 
 			var json = JObject.Parse(response);
 
@@ -109,10 +112,6 @@ namespace Oxide.Plugins {
 
 				foreach (string prefabName in json["ignoreListOnEntityBuilt"]) {
 					ignoreListOnEntityBuilt.Add(prefabName);
-				}
-
-				foreach (string prefabName in json["ignoreListOnPickupEntity"]) {
-					ignoreListOnPickupEntity.Add(prefabName);
 				}
 
 				foreach (string prefabName in json["ignoreListOnEntityDeath"]) {
@@ -139,7 +138,7 @@ namespace Oxide.Plugins {
 
 		}
 
-		void AppendToLog(string category, BasePlayer initiator, string prefab, string info, string rag) {
+		void AppendToLog(string category, BasePlayer initiator, string prefab, string info, int rag) {
 
 			Int32 timestamp = GetTimestamp();
 
@@ -150,7 +149,7 @@ namespace Oxide.Plugins {
 			float positionY = initiator.transform.position.y;
 			float positionZ = initiator.transform.position.z;
 
-			actionLog.Add(new {
+			actions.Add(new {
 				timestamp = timestamp,
 				initiatorSteamID = initiatorSteamID,
 				initiatorSteamName = initiatorSteamName,
@@ -167,7 +166,7 @@ namespace Oxide.Plugins {
 
 		void SendActionLog() {
 
-			int logCount = actionLog.Count();
+			int logCount = actions.Count();
 
 			if (logCount != 0) {
 
@@ -176,13 +175,18 @@ namespace Oxide.Plugins {
 				string path = "actions/put.php";
 				string endpoint = hostname + "/" + version + "/" + path;
 
-				var serializedActionLog = JsonConvert.SerializeObject(actionLog);
+				actionsToSend = actions;
+				actions.Clear();
 
-Puts("Action log: " + serializedActionLog);
+				var serializedActions = JsonConvert.SerializeObject(actionsToSend);
+
+				if (debug) {
+					Puts("Action log: " + serializedActions);
+				}
 
 				var data = new {
 					serverSecretKey = serverSecretKey,
-					actionLog = serializedActionLog
+					actions = serializedActions
 				};
 
 				string payload = JsonConvert.SerializeObject(data);
@@ -191,7 +195,9 @@ Puts("Action log: " + serializedActionLog);
 
 			} else {
 
-				Puts("Send Action Log: No actions to send");
+				if (debug) {
+					Puts("Send Action Log: No actions to send");
+				}
 
 			}
 
@@ -210,10 +216,10 @@ Puts("Action log: " + serializedActionLog);
 					if (debug) {
 						string records = (string)jsonResponse["records"];
 						Puts("Status: " + status + " | Records: " + records);
+						Puts("Clear action log");
 					}
 
-					Puts("Clear action log");
-					actionLog.Clear();
+					actionsToSend.Clear();
 
 				} else if (status == "error") {
 
@@ -240,7 +246,7 @@ Puts("Action log: " + serializedActionLog);
 
 			if (prefab != null) {
 
-				if (ignoreListOnEntityBuilt.Contains(prefab)) {
+				if (!ignoreListOnEntityBuilt.Contains(prefab)) {
 
 					BasePlayer initiator = plan.GetOwnerPlayer();
 
@@ -248,7 +254,7 @@ Puts("Action log: " + serializedActionLog);
 
 						string category = "build";
 						string info = "";
-						string rag = "green";
+						int rag = 0;
 
 						AppendToLog(category, initiator, prefab, info, rag);
 
@@ -266,11 +272,11 @@ Puts("Action log: " + serializedActionLog);
 
 			if (prefab != null) {
 
-				if (ignoreListOnPickupEntity.Contains(prefab)) {
+				if (!ignoreListOnEntityBuilt.Contains(prefab)) {
 
 					string category = "pickup";
 					string info = "";
-					string rag = "amber";
+					int rag = 1;
 
 					AppendToLog(category, initiator, prefab, info, rag);
 
@@ -290,7 +296,7 @@ Puts("Action log: " + serializedActionLog);
 
 					string category = "upgrade";
 					string info = grade.ToString();
-					string rag = "green";
+					int rag = 0;
 
 					AppendToLog(category, initiator, prefab, info, rag);
 
@@ -308,7 +314,7 @@ Puts("Action log: " + serializedActionLog);
 
 				string category = "demolish";
 				string info = "";
-				string rag = "amber";
+				int rag = 1;
 
 				AppendToLog(category, initiator, prefab, info, rag);
 
@@ -322,7 +328,7 @@ Puts("Action log: " + serializedActionLog);
 
 			if (prefab != null) {
 				
-				if (ignoreListOnEntityDeath.Contains(prefab)) {
+				if (!ignoreListOnEntityDeath.Contains(prefab)) {
 
 					if ((player != null) && (player.Initiator != null)) {
 
@@ -332,7 +338,7 @@ Puts("Action log: " + serializedActionLog);
 
 							string category = "destroy";
 							string info = "";
-							string rag = "red";
+							int rag = 2;
 
 							AppendToLog(category, initiator, prefab, info, rag);
 
@@ -355,11 +361,11 @@ Puts("Action log: " + serializedActionLog);
 
 				string category;
 				string info;
-				string rag;
+				int rag;
 
 				string prefab = entity.ShortPrefabName;
 
-				if (ignoreListOnLootEntity.Contains(prefab)) {
+				if (!ignoreListOnLootEntity.Contains(prefab)) {
 
 					if (entity is BasePlayer) {
 
@@ -367,13 +373,13 @@ Puts("Action log: " + serializedActionLog);
 
 						category = "looted";
 						info = looted.displayName;
-						rag = "amber";
+						rag = 1;
 
 					} else {
 
 						category = "looted";
 						info = "";
-						rag = "green";
+						rag = 0;
 
 					}
 
@@ -395,7 +401,7 @@ Puts("Action log: " + serializedActionLog);
 				string category = "cupboard";
 				string prefab = "cupboard.tool.deployed";
 				string info = "authorised";
-				string rag = "green";
+				int rag = 0;
 
 				AppendToLog(category, initiator, prefab, info, rag);
 
@@ -410,7 +416,7 @@ Puts("Action log: " + serializedActionLog);
 				string category = "cupboard";
 				string prefab = "cupboard.tool.deployed";
 				string info = "deauthorised";
-				string rag = "green";
+				int rag = 0;
 
 				AppendToLog(category, initiator, prefab, info, rag);
 
@@ -425,7 +431,7 @@ Puts("Action log: " + serializedActionLog);
 				string category = "cupboard";
 				string prefab = "cupboard.tool.deployed";
 				string info = "cleared";
-				string rag = "amber";
+				int rag = 1;
 
 				AppendToLog(category, initiator, prefab, info, rag);
 
@@ -444,7 +450,7 @@ Puts("Action log: " + serializedActionLog);
 
 				string category = "sign";
 				string info = "updated";
-				string rag = "green";
+				int rag = 0;
 
 				AppendToLog(category, initiator, prefab, info, rag);
 
@@ -460,7 +466,7 @@ Puts("Action log: " + serializedActionLog);
 
 				string category = "sign";
 				string info = "locked";
-				string rag = "green";
+				int rag = 0;
 
 				AppendToLog(category, initiator, prefab, info, rag);
 
@@ -495,13 +501,13 @@ Puts("Action log: " + serializedActionLog);
 
 			if (prefab != null) {
 
-				if (ignoreListHandleDoorActions.Contains(prefab)) {
+				if (!ignoreListHandleDoorActions.Contains(prefab)) {
 
 					if (initiator != null) {
 
 						string category = action;
 						string info = action;
-						string rag = "green";
+						int rag = 0;
 
 						AppendToLog(category, initiator, prefab, info, rag);
 
@@ -534,13 +540,13 @@ Puts("Action log: " + serializedActionLog);
 
 			if (prefab != null) {
 				
-				if (ignoreListHandleMountableActions.Contains(prefab)) {
+				if (!ignoreListHandleMountableActions.Contains(prefab)) {
 
 					if (initiator != null) {
 
 						string category = action;
 						string info = action;
-						string rag = "green";
+						int rag = 0;
 
 						AppendToLog(category, initiator, prefab, info, rag);
 
@@ -664,7 +670,7 @@ Puts("Action log: " + serializedActionLog);
 				Keys = new Keys() {
 					serverSecretKey = ""
 				},
-				Services = new Services() {
+				Options = new Options() {
 					debug = false
 				},
 				Version = Version
@@ -684,7 +690,7 @@ Puts("Action log: " + serializedActionLog);
 		private class ConfigData {
 
 			public Keys Keys;
-			public Services Services;
+			public Options Options;
 			public VersionNumber Version;
 
 		}
@@ -695,7 +701,7 @@ Puts("Action log: " + serializedActionLog);
 
 		}
 		
-		public class Services {
+		public class Options {
 
 			public bool debug;
 
